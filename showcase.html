@@ -198,6 +198,7 @@ let target = 0, morph = 0, lastSwitch = performance.now();
 function nextForm() {
   target++;
   lastSwitch = performance.now();
+  if (!formEl) return;
   formEl.classList.add("hide");
   setTimeout(() => {
     formEl.textContent = forms[target % forms.length];
