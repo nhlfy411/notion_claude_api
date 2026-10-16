@@ -20,12 +20,14 @@
   #hint { left: 0; right: 0; bottom: 32px; text-align: center; font-size: 11px; letter-spacing: .3em; opacity: .35; }
   #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
          color: #fff; font-family: sans-serif; }
-  #home { top: 76px; left: 32px; pointer-events: auto; padding: 7px 16px; border-radius: 999px;
+  #home, #theme { pointer-events: auto; padding: 7px 16px; border-radius: 999px;
           border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.06);
           -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
           color: rgba(255,255,255,.85); text-decoration: none; font-size: 11px; letter-spacing: .3em;
           transition: background .3s, border-color .3s; }
-  #home:hover, #home:active { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.7); }
+  #home { top: 76px; left: 32px; }
+  #theme { top: 52px; right: 32px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #home:hover, #home:active, #theme:hover, #theme:active { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.7); }
 </style>
 </head>
 <body>
@@ -33,6 +35,7 @@
 <div class="ui" id="brand"><h1>HARLEY</h1><p>REAL-TIME RAYMARCHING</p></div>
 <a class="ui" id="home" href="index.html">← 返回首页</a>
 <div class="ui" id="fps">-- FPS</div>
+<button class="ui" id="theme" type="button">配色 · 幻彩</button>
 <div class="ui" id="form">液态金属 · METABALLS</div>
 <div class="ui" id="hint">拖动旋转 · 轻点切换形态</div>
 <div id="err">你的浏览器不支持 WebGL</div>
@@ -48,6 +51,7 @@ uniform vec2 uRes;
 uniform float uTime;
 uniform vec2 uRot;
 uniform float uMorph;
+uniform vec3 uPalA, uPalB, uPalD;
 #define PI 3.14159265
 
 mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
@@ -55,7 +59,7 @@ float smin(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
   return mix(b, a, h) - k * h * (1.0 - h);
 }
-vec3 pal(float t) { return 0.5 + 0.5 * cos(2.0 * PI * (t + vec3(0.0, 0.33, 0.67))); }
+vec3 pal(float t) { return uPalA + uPalB * cos(2.0 * PI * (t + uPalD)); }
 
 // 形态一：液态金属融球
 float fBlobs(vec3 p) {
@@ -87,13 +91,33 @@ float fKnot(vec3 p) {
   return (length(q) - 0.2) * 0.8;
 }
 
+// 形态四：分形曼德球
+float fBulb(vec3 p) {
+  p.xz *= rot(uTime * 0.2);
+  const float S = 1.2;
+  p /= S;
+  vec3 z = p;
+  float dr = 1.0, r = 0.0;
+  float pw = 8.0;
+  for (int i = 0; i < 5; i++) {
+    r = length(z);
+    if (r > 2.0) break;
+    float th = acos(clamp(z.z / r, -1.0, 1.0)) * pw;
+    float ph = atan(z.y, z.x) * pw + uTime * 0.3;
+    dr = pow(r, pw - 1.0) * pw * dr + 1.0;
+    z = pow(r, pw) * vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th)) + p;
+  }
+  return 0.5 * log(r) * r / dr * S;
+}
+
 float map(vec3 p) {
   p.yz *= rot(uRot.y);
   p.xz *= rot(uRot.x + uTime * 0.15);
   float m = uMorph, d;
   if (m < 1.0)      d = mix(fBlobs(p), fGyroid(p), smoothstep(0.0, 1.0, m));
   else if (m < 2.0) d = mix(fGyroid(p), fKnot(p), smoothstep(0.0, 1.0, m - 1.0));
-  else              d = mix(fKnot(p), fBlobs(p), smoothstep(0.0, 1.0, m - 2.0));
+  else if (m < 3.0) d = mix(fKnot(p), fBulb(p), smoothstep(0.0, 1.0, m - 2.0));
+  else              d = mix(fBulb(p), fBlobs(p), smoothstep(0.0, 1.0, m - 3.0));
   return d * 0.75;
 }
 
@@ -185,7 +209,25 @@ const U = {
   time: gl.getUniformLocation(prog, "uTime"),
   rot: gl.getUniformLocation(prog, "uRot"),
   morph: gl.getUniformLocation(prog, "uMorph"),
+  palA: gl.getUniformLocation(prog, "uPalA"),
+  palB: gl.getUniformLocation(prog, "uPalB"),
+  palD: gl.getUniformLocation(prog, "uPalD"),
 };
+
+// 配色主题（颜色 = a + b * cos(2π(t + d))）
+const themes = [
+  { name: "幻彩", a: [0.5, 0.5, 0.5],    b: [0.5, 0.5, 0.5],    d: [0.0, 0.33, 0.67] },
+  { name: "霓虹", a: [0.55, 0.35, 0.65], b: [0.45, 0.45, 0.35], d: [0.75, 0.15, 0.45] },
+  { name: "冰蓝", a: [0.4, 0.6, 0.8],    b: [0.25, 0.3, 0.2],   d: [0.0, 0.1, 0.2] },
+  { name: "熔岩", a: [0.6, 0.28, 0.1],   b: [0.4, 0.28, 0.1],   d: [0.0, 0.08, 0.15] },
+];
+let themeIdx = 0;
+const pal = { a: themes[0].a.slice(), b: themes[0].b.slice(), d: themes[0].d.slice() };
+const themeEl = document.getElementById("theme");
+themeEl.addEventListener("click", () => {
+  themeIdx = (themeIdx + 1) % themes.length;
+  themeEl.textContent = "配色 · " + themes[themeIdx].name;
+});
 
 // 自适应分辨率
 const maxScale = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -199,7 +241,7 @@ addEventListener("resize", resize);
 resize();
 
 // 形态切换
-const forms = ["液态金属 · METABALLS", "极小曲面 · GYROID", "双螺旋环 · TWISTED TORUS"];
+const forms = ["液态金属 · METABALLS", "极小曲面 · GYROID", "双螺旋环 · TWISTED TORUS", "分形曼德球 · MANDELBULB"];
 const formEl = document.getElementById("form");
 let target = 0, morph = 0, lastSwitch = performance.now();
 function nextForm() {
@@ -256,7 +298,12 @@ function frame(now) {
   gl.uniform2f(U.res, cv.width, cv.height);
   gl.uniform1f(U.time, now / 1000);
   gl.uniform2f(U.rot, rotX, rotY);
-  gl.uniform1f(U.morph, ((morph % 3) + 3) % 3);
+  gl.uniform1f(U.morph, ((morph % 4) + 4) % 4);
+  const th = themes[themeIdx];
+  for (const k of ["a", "b", "d"]) for (let i = 0; i < 3; i++) pal[k][i] += (th[k][i] - pal[k][i]) * 0.05;
+  gl.uniform3fv(U.palA, pal.a);
+  gl.uniform3fv(U.palB, pal.b);
+  gl.uniform3fv(U.palD, pal.d);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   requestAnimationFrame(frame);
 }
