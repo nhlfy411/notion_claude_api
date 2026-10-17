@@ -28,6 +28,25 @@
   #home { top: 76px; left: 32px; }
   #theme { top: 52px; right: 32px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   #home:hover, #home:active, #theme:hover, #theme:active { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.7); }
+  /* 声控按钮：和 particles.html 同款，放在形态名上方 */
+  #mic { pointer-events: auto; left: 50%; bottom: 96px; transform: translateX(-50%); padding: 13px 26px;
+         border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap;
+         color: #05050a; font-size: 14px; font-weight: 600; letter-spacing: .2em;
+         background: linear-gradient(90deg, #7cf7ff, #b18cff, #ff8ad8, #7cf7ff); background-size: 300% 100%;
+         box-shadow: 0 0 24px rgba(160,140,255,.55); animation: flow 4s linear infinite;
+         -webkit-tap-highlight-color: transparent; transition: color .3s, opacity .3s; }
+  #mic:active { transform: translateX(-50%) scale(.96); }
+  /* 开启后：按钮本身就是音量条，--v 是 0~1 的当前音量 */
+  #mic.on { min-width: 220px; color: #fff; animation: none; border-color: rgba(124,247,255,.8);
+            text-shadow: 0 1px 4px rgba(0,0,0,.6); background-size: 100% 100%;
+            background: linear-gradient(90deg, rgba(124,247,255,.55) calc(var(--v, 0) * 100%), rgba(124,247,255,.1) 0);
+            -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); transition: border-color .15s; }
+  #mic.on.loud { border-color: #ff8ad8; }
+  #mic.busy { opacity: .7; }
+  #micTip { left: 50%; bottom: 152px; transform: translateX(-50%); display: none; width: max-content; max-width: 86vw;
+            padding: 7px 12px; border-radius: 10px; font-size: 11px; line-height: 1.6; text-align: center;
+            background: rgba(255,170,60,.14); border: 1px solid rgba(255,170,60,.5); color: #ffd9a8; }
+  @keyframes flow { to { background-position: 300% 0; } }
 </style>
 </head>
 <body>
@@ -37,7 +56,9 @@
 <div class="ui" id="fps">-- FPS</div>
 <button class="ui" id="theme" type="button">配色 · 幻彩</button>
 <div class="ui" id="form">液态金属 · METABALLS</div>
-<div class="ui" id="hint">拖动旋转 · 轻点切换形态 · 双指缩放</div>
+<button class="ui" id="mic" type="button">🎤 开启声控</button>
+<div class="ui" id="micTip"></div>
+<div class="ui" id="hint">拖动旋转 · 轻点切换形态 · 双指缩放 · 拍手切换</div>
 <div id="err">你的浏览器不支持 WebGL</div>
 
 <script id="vs" type="x-shader/x-vertex">
@@ -52,6 +73,8 @@ uniform float uTime;
 uniform vec2 uRot;
 uniform float uMorph;
 uniform float uDist;            // 相机距离（双指 / 滚轮缩放）
+uniform float uLoud;            // 声控：音量力度 0~1（安静时 = 0）
+uniform mat3 uHue;              // 声控：色相旋转矩阵（安静时 = 单位矩阵）
 uniform vec3 uPalA, uPalB, uPalD;
 #define PI 3.14159265
 
@@ -60,7 +83,7 @@ float smin(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
   return mix(b, a, h) - k * h * (1.0 - h);
 }
-vec3 pal(float t) { return uPalA + uPalB * cos(2.0 * PI * (t + uPalD)); }
+vec3 pal(float t) { return uHue * (uPalA + uPalB * cos(2.0 * PI * (t + uPalD))); }
 
 // 形态一：液态金属融球
 float fBlobs(vec3 p) {
@@ -114,11 +137,17 @@ float fBulb(vec3 p) {
 float map(vec3 p) {
   p.yz *= rot(uRot.y);
   p.xz *= rot(uRot.x + uTime * 0.15);
+  // 声控：整体膨胀（缩放坐标再把距离乘回来，SDF 仍然正确）；uLoud = 0 时 sc = 1，和原来完全一样
+  float sc = 1.0 + uLoud * 0.12;
+  p /= sc;
   float m = uMorph, d;
   if (m < 1.0)      d = mix(fBlobs(p), fGyroid(p), smoothstep(0.0, 1.0, m));
   else if (m < 2.0) d = mix(fGyroid(p), fKnot(p), smoothstep(0.0, 1.0, m - 1.0));
   else if (m < 3.0) d = mix(fKnot(p), fBulb(p), smoothstep(0.0, 1.0, m - 2.0));
   else              d = mix(fBulb(p), fBlobs(p), smoothstep(0.0, 1.0, m - 3.0));
+  d *= sc;
+  // 声控：表面起伏脉动，音量越大越强（uLoud = 0 时减去 0）
+  d -= uLoud * 0.05 * sin(p.x * 6.0 + uTime * 5.0) * sin(p.y * 6.0 + uTime * 4.0) * sin(p.z * 6.0 + uTime * 6.0);
   return d * 0.75;
 }
 
@@ -212,6 +241,8 @@ const U = {
   rot: gl.getUniformLocation(prog, "uRot"),
   morph: gl.getUniformLocation(prog, "uMorph"),
   dist: gl.getUniformLocation(prog, "uDist"),
+  loud: gl.getUniformLocation(prog, "uLoud"),
+  hue: gl.getUniformLocation(prog, "uHue"),
   palA: gl.getUniformLocation(prog, "uPalA"),
   palB: gl.getUniformLocation(prog, "uPalB"),
   palD: gl.getUniformLocation(prog, "uPalD"),
@@ -312,6 +343,121 @@ cv.addEventListener("wheel", e => {
   distT = clampD(distT * Math.exp(e.deltaY * 0.001));
 }, { passive: false });
 
+// 声控：和 particles.html 同款（只在本机分析，不录音不上传；需要 HTTPS 和用户授权）
+const micEl = document.getElementById("mic");
+const micTip = document.getElementById("micTip");
+// env：力度包络 0~1；cent：频谱重心 0（低音）~1（高音）；gate：是否超过噪声底门限；lvl：音量条；hit：本帧是否重拍 / 音量突跳
+const mic = { on: false, vol: 0, bass: 0, floor: 1, bassAvg: 0, volAvg: 0, env: 0, cent: 0.5, gate: false, lvl: 0, hit: false };
+const inWeChat = /MicroMessenger/i.test(navigator.userAgent);
+function showTip(msg) { micTip.textContent = msg; micTip.style.display = msg ? "block" : "none"; }
+function closeCtx(c) { try { Promise.resolve(c.close()).catch(() => {}); } catch (_) {} }
+// 出错只影响声控：按钮上方一行提示，手指操作照常
+function micFail(e) {
+  const name = e && e.name;
+  let msg, btn = "🎤 点此重试";
+  if (!e) {
+    btn = "🎤 声控不可用";
+    msg = !window.isSecureContext ? "声控需要 HTTPS 页面，请用 https:// 地址打开"
+      : inWeChat ? "微信里不支持麦克风，请点右上角「…」用浏览器打开" : "当前浏览器不支持麦克风，请换 Safari / Chrome 打开";
+  } else if (name === "NotAllowedError" || name === "SecurityError") {
+    msg = "麦克风未授权，可在浏览器设置里打开；微信里请用浏览器打开";
+  } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+    msg = "没有检测到麦克风";
+  } else if (name === "NotReadableError" || name === "AbortError") {
+    msg = "麦克风被其他应用占用，关掉后再试";
+  } else {
+    msg = "声控不可用（" + (name || "未知错误") + "），手指操作不受影响";
+  }
+  micEl.textContent = btn;
+  showTip(msg);
+}
+function stopMic() {
+  mic.stream.getTracks().forEach(t => t.stop());
+  closeCtx(mic.ctx);
+  Object.assign(mic, { on: false, vol: 0, bass: 0, env: 0, gate: false, lvl: 0, hit: false });
+  micEl.classList.remove("on", "loud"); micEl.textContent = "🎤 开启声控";
+  micEl.style.boxShadow = ""; micEl.style.removeProperty("--v");
+}
+async function toggleMic() {
+  if (mic.busy) return;
+  if (mic.on) { stopMic(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !AC) { micFail(null); return; }
+  let ctx = null, stream = null;
+  mic.busy = true;
+  micEl.classList.add("busy"); micEl.textContent = "🎤 授权中…"; showTip("");
+  try {
+    // iPhone Safari：AudioContext 必须在点击的同步阶段新建并 resume，麦克风也在这里同步申请，任何 await 都放在后面
+    ctx = new AC();
+    const resumed = ctx.resume();
+    // 三项处理全关：拿原始声音，鼓点 / 拍手的起伏不会被自动增益压平
+    const asked = navigator.mediaDevices.getUserMedia(
+      { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    stream = await asked;
+    await resumed;
+    if (ctx.state !== "running") await ctx.resume();
+    // 只接到 AnalyserNode 读频谱：不接扬声器（不会啸叫），不用 MediaRecorder，不发网络请求 → 不录音、不上传
+    const an = ctx.createAnalyser();
+    an.fftSize = 512; an.smoothingTimeConstant = 0.6;
+    ctx.createMediaStreamSource(stream).connect(an);
+    // 麦克风被系统断开（来电、权限被收回）时自动关掉
+    stream.getTracks().forEach(t => { t.onended = () => { if (mic.on) { stopMic(); showTip("麦克风已断开，点按钮可重新开启"); } }; });
+    Object.assign(mic, { on: true, stream, ctx, an, buf: new Uint8Array(an.frequencyBinCount),
+      floor: 1, bassAvg: 0, volAvg: 0, env: 0, cent: 0.5, gate: false, lvl: 0, hit: false });
+    micEl.classList.add("on"); micEl.textContent = "🎤 声控中 · 点击关闭";
+  } catch (e) {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (ctx) closeCtx(ctx);
+    micFail(e);
+  }
+  mic.busy = false;
+  micEl.classList.remove("busy");
+}
+micEl.addEventListener("click", toggleMic);
+function readMic() {
+  if (!mic.on) return false;
+  mic.an.getByteFrequencyData(mic.buf);
+  const b = mic.buf, n = b.length;            // 每格约 90Hz
+  let lo = 0, all = 0, wsum = 0;
+  for (let i = 1; i < n; i++) {
+    const v = b[i] / 255;
+    all += v; wsum += v * i;
+    if (i < 6) lo += v;
+  }
+  mic.vol = all / (n - 1); mic.bass = lo / 5;
+  // 自适应噪声底：更安静就立刻跟下去；没出声时约 5 秒跟上环境变吵；出声时几乎冻结
+  if (mic.vol < mic.floor) mic.floor = mic.vol;
+  else mic.floor += (mic.vol - mic.floor) * (mic.gate ? 0.0005 : 0.004);
+  // 带回差的门限：超过 底噪×1.5+0.015 才算有声，降到 底噪×1.2+0.008 以下才算安静
+  if (!mic.gate && mic.vol > mic.floor * 1.5 + 0.015) mic.gate = true;
+  else if (mic.gate && mic.vol < mic.floor * 1.2 + 0.008) mic.gate = false;
+  // 力度包络：涨得快、落得慢
+  const target = mic.gate ? Math.min(1, (mic.vol - mic.floor) * 6) : 0;
+  mic.env += (target - mic.env) * (target > mic.env ? 0.5 : 0.12);
+  // 频谱重心：按对数映射到 0~1，约 280Hz → 0，约 3.7kHz → 1
+  if (mic.gate && all > 0) {
+    const t = Math.log(wsum / all / 3) / Math.log(40 / 3);
+    mic.cent += (Math.min(1, Math.max(0, t)) - mic.cent) * 0.15;
+  }
+  // 重拍：低音突增，或整体音量突然跳高（拍手）；用更新前的平均值比较
+  mic.hit = mic.gate && ((mic.bass > 0.35 && mic.bass > mic.bassAvg * 1.5) || mic.vol > mic.volAvg * 1.6 + 0.04);
+  mic.bassAvg += (mic.bass - mic.bassAvg) * 0.05;
+  mic.volAvg += (mic.vol - mic.volAvg) * 0.05;
+  micEl.style.boxShadow = "0 0 " + Math.round(mic.env * 40) + "px rgba(124,247,255,.8)";
+  // 音量条：开方让小音量也看得见，再平滑一下避免抖动；过门限时边框变粉
+  mic.lvl += (Math.min(1, Math.sqrt(mic.vol * 2.5)) - mic.lvl) * 0.35;
+  micEl.style.setProperty("--v", mic.lvl.toFixed(3));
+  micEl.classList.toggle("loud", mic.gate);
+  return true;
+}
+// 色相旋转矩阵：和 particles.html 的 hueRot 同一个公式（绕灰轴 (1,1,1) 转 a 弧度），写成列主序 mat3 给着色器
+// 配色是逐通道的余弦公式，只能转输出颜色；a = 0 时正好是单位矩阵
+function hueMat(a) {
+  const cs = Math.cos(a), s = Math.sin(a) / Math.sqrt(3), t = (1 - cs) / 3;
+  return [cs + t, s + t, t - s,   t - s, cs + t, s + t,   s + t, t - s, cs + t];
+}
+let hue = 0;
+
 // 主循环
 const fpsEl = document.getElementById("fps");
 let prev = performance.now(), acc = 0, frames = 0;
@@ -333,12 +479,19 @@ function frame(now) {
   velX *= 0.93; velY *= 0.93;
   morph += (target - morph) * 0.035;
   dist += (distT - dist) * 0.15;
+  // 声控：音量 → 膨胀 + 脉动；拍手 / 重拍 → 下一个形态（距上次切换 ≥ 1.2 秒）；频谱重心 → 色相缓慢偏移
+  const heard = readMic(), loud = heard ? mic.env : 0;
+  if (heard && mic.hit && now - lastSwitch > 1200) nextForm();
+  hue += ((heard && mic.gate ? (mic.cent - 0.5) * 2.2 : 0) - hue) * 0.02;
+  if (Math.abs(hue) < 1e-4) hue = 0;
 
   gl.uniform2f(U.res, cv.width, cv.height);
   gl.uniform1f(U.time, now / 1000);
   gl.uniform2f(U.rot, rotX, rotY);
   gl.uniform1f(U.morph, ((morph % 4) + 4) % 4);
   gl.uniform1f(U.dist, dist);
+  gl.uniform1f(U.loud, loud);
+  gl.uniformMatrix3fv(U.hue, false, hueMat(hue));
   const th = themes[themeIdx];
   for (const k of ["a", "b", "d"]) for (let i = 0; i < 3; i++) pal[k][i] += (th[k][i] - pal[k][i]) * 0.05;
   gl.uniform3fv(U.palA, pal.a);
