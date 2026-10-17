@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>HARLEY · 粒子星系</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #020205; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .ui { position: fixed; pointer-events: none; color: rgba(255,255,255,.85);
+        font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  #brand { top: 28px; left: 32px; }
+  #brand h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .6em; }
+  #brand p { margin: 6px 0 0; font-size: 11px; letter-spacing: .25em; opacity: .5; }
+  #fps { top: 28px; right: 32px; font: 11px/1 ui-monospace, Menlo, monospace; opacity: .45; letter-spacing: .1em; }
+  #form { left: 0; right: 0; bottom: 64px; text-align: center; font-size: 13px; letter-spacing: .5em; }
+  #hint { left: 0; right: 0; bottom: 32px; text-align: center; font-size: 11px; letter-spacing: .3em; opacity: .35; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #fff; font-family: sans-serif; }
+  #home, #theme { pointer-events: auto; padding: 7px 16px; border-radius: 999px;
+          border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.06);
+          -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+          color: rgba(255,255,255,.85); text-decoration: none; font-size: 11px; letter-spacing: .3em;
+          transition: background .3s, border-color .3s; }
+  #home { top: 76px; left: 32px; }
+  #theme { top: 52px; right: 32px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #home:hover, #home:active, #theme:hover, #theme:active { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.7); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="ui" id="brand"><h1>HARLEY</h1><p>GPU PARTICLE GALAXY</p></div>
+<a class="ui" id="home" href="index.html">← 返回首页</a>
+<div class="ui" id="fps">-- FPS</div>
+<button class="ui" id="theme" type="button">配色 · 星河</button>
+<div class="ui" id="form">粒子星系 · GALAXY</div>
+<div class="ui" id="hint">拖动拨动星河 · 轻点释放冲击波</div>
+<div id="err">你的浏览器不支持 WebGL</div>
+
+<script id="vs" type="x-shader/x-vertex">
+attribute vec4 aP;              // 星系粒子：半径, 角度, 高度, 随机数；背景星：经度, 纬度, 距离, 2+随机数
+uniform float uTime, uAspect, uSize;
+uniform vec2 uRot;              // 偏航, 俯仰
+uniform vec3 uTouch;            // 手指 NDC 坐标 + 力度
+uniform vec3 uBurst;            // 冲击波 NDC 坐标 + 经过秒数
+uniform vec3 uCore, uArmA, uArmB;
+varying vec3 vCol;
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+void main() {
+  float rnd = fract(aP.w);
+  vec3 p, col;
+  float br;
+  if (aP.w > 1.5) {
+    float s = sin(aP.y);
+    p = vec3(s * cos(aP.x), cos(aP.y), s * sin(aP.x)) * aP.z;
+    col = mix(vec3(0.75, 0.82, 1.0), uArmB, rnd * 0.4);
+    br = 0.35 + 0.3 * sin(uTime * 2.5 + rnd * 80.0);
+  } else {
+    float r = aP.x;
+    // 较差自转：内圈快、外圈慢
+    float a = aP.y - uTime * (0.05 + 0.14 / (0.6 + r));
+    p = vec3(cos(a) * r, aP.z, sin(a) * r);
+    col = mix(uCore, mix(uArmA, uArmB, rnd), smoothstep(0.05, 1.7, r));
+    br = mix(1.0, 0.6, smoothstep(0.0, 3.2, r));
+  }
+  p.xz *= rot(uRot.x);
+  p.yz *= rot(uRot.y);
+  float w = 6.5 - p.z;
+  vec2 ndc = vec2(p.x * 2.3 / uAspect, p.y * 2.3) / w;
+
+  // 手指拨动：推开 + 旋涡
+  vec2 asp = vec2(uAspect, 1.0);
+  vec2 d = (ndc - uTouch.xy) * asp;
+  float L = length(d) + 1e-4;
+  float f = uTouch.z * exp(-L * L * 7.0);
+  ndc += (d / L * 0.18 + vec2(-d.y, d.x) / L * 0.3) * f / asp;
+  float glow = f;
+
+  // 冲击波：向外扩散的环
+  vec2 b = (ndc - uBurst.xy) * asp;
+  float bl = length(b) + 1e-4;
+  float ring = uBurst.z * 1.4;
+  float g = exp(-pow((bl - ring) * 7.0, 2.0)) * exp(-uBurst.z * 1.6);
+  ndc += b / bl * g * 0.1 / asp;
+  glow += g * 1.6;
+
+  gl_Position = vec4(ndc * w, 0.0, w);
+  gl_PointSize = clamp(uSize * (0.5 + rnd) / w * (1.0 + glow * 0.8), 1.0, 28.0);
+  vCol = col * br * (0.3 + glow * 0.9);
+}
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision mediump float;
+varying vec3 vCol;
+void main() {
+  vec2 q = gl_PointCoord - 0.5;
+  float d = dot(q, q) * 4.0;
+  if (d > 1.0) discard;
+  float a = 1.0 - d;
+  gl_FragColor = vec4(vCol * a * a, 1.0);
+}
+</script>
+
+<script>
+const cv = document.getElementById("c");
+const gl = cv.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
+if (!gl) { document.getElementById("err").style.display = "flex"; throw new Error("no webgl"); }
+
+function shader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, document.getElementById("vs").textContent));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, document.getElementById("fs").textContent));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+// 生成粒子（只生成一次，之后全部交给 GPU）
+const N = innerWidth < 820 ? 160000 : 320000;
+const ARMS = 3, TAU = Math.PI * 2;
+function gauss() { return Math.sqrt(-2 * Math.log(Math.random() + 1e-9)) * Math.cos(TAU * Math.random()); }
+const data = new Float32Array(N * 4);
+for (let i = 0; i < N; i++) {
+  const w = Math.random() * 0.999;
+  if (i % 12 === 0) {
+    data.set([Math.random() * TAU, Math.acos(Math.random() * 2 - 1), 9 + Math.random() * 6, 2 + w], i * 4);
+  } else {
+    const r = Math.max(0.02, Math.pow(Math.random(), 1.6) * 3.2 + gauss() * 0.06);
+    const arm = Math.floor(Math.random() * ARMS) / ARMS * TAU;
+    const ang = arm + r * 1.9 + gauss() * 0.4 / (0.5 + r * 0.6);
+    const h = gauss() * (0.05 + 0.35 * Math.exp(-r * r * 3));
+    data.set([r, ang, h, w], i * 4);
+  }
+}
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+const aLoc = gl.getAttribLocation(prog, "aP");
+gl.enableVertexAttribArray(aLoc);
+gl.vertexAttribPointer(aLoc, 4, gl.FLOAT, false, 0, 0);
+
+const U = {};
+for (const k of ["uTime", "uAspect", "uSize", "uRot", "uTouch", "uBurst", "uCore", "uArmA", "uArmB"])
+  U[k] = gl.getUniformLocation(prog, k);
+
+gl.disable(gl.DEPTH_TEST);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.ONE, gl.ONE);
+gl.clearColor(0.008, 0.008, 0.02, 1);
+
+// 配色主题（平滑过渡）
+const themes = [
+  { name: "星河", core: [1.0, 0.85, 0.6],  a: [0.35, 0.55, 1.0], b: [0.9, 0.4, 0.9] },
+  { name: "极光", core: [0.8, 1.0, 0.9],   a: [0.2, 0.9, 0.7],   b: [0.3, 0.5, 1.0] },
+  { name: "熔金", core: [1.0, 0.95, 0.8],  a: [1.0, 0.55, 0.2],  b: [0.9, 0.25, 0.3] },
+];
+let themeIdx = 0;
+const pal = { core: themes[0].core.slice(), a: themes[0].a.slice(), b: themes[0].b.slice() };
+const themeEl = document.getElementById("theme");
+themeEl.addEventListener("click", () => {
+  themeIdx = (themeIdx + 1) % themes.length;
+  themeEl.textContent = "配色 · " + themes[themeIdx].name;
+});
+
+// 分辨率
+const scale = Math.min(window.devicePixelRatio || 1, 1.5);
+function resize() {
+  cv.width = Math.floor(innerWidth * scale);
+  cv.height = Math.floor(innerHeight * scale);
+  gl.viewport(0, 0, cv.width, cv.height);
+}
+addEventListener("resize", resize);
+resize();
+
+// 交互：拖动 = 拨动 + 旋转（带惯性），轻点 = 冲击波
+let rotX = 0, tilt = 1.05, velX = 0, velY = 0;
+let dragging = false, lastX = 0, lastY = 0, moved = 0, touchT = 0, burstAt = -1e9;
+const touch = [0, 0, 0], burst = [0, 0, 99];
+const toNdc = e => [e.clientX / innerWidth * 2 - 1, 1 - e.clientY / innerHeight * 2];
+cv.addEventListener("pointerdown", e => {
+  dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  [touch[0], touch[1]] = toNdc(e);
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  moved += Math.abs(dx) + Math.abs(dy);
+  if (moved > 6) touchT = 1;
+  velX = dx * 0.004; velY = dy * 0.003;
+  lastX = e.clientX; lastY = e.clientY;
+  [touch[0], touch[1]] = toNdc(e);
+});
+function release(e) {
+  if (!dragging) return;
+  dragging = false; touchT = 0;
+  if (moved < 6) { [burst[0], burst[1]] = toNdc(e); burstAt = performance.now(); }
+}
+cv.addEventListener("pointerup", release);
+cv.addEventListener("pointercancel", release);
+
+// 主循环：按帧率自动增减粒子数
+const fpsEl = document.getElementById("fps");
+let count = N, prev = performance.now(), acc = 0, frames = 0;
+function frame(now) {
+  const dt = now - prev; prev = now;
+  acc += dt; frames++;
+  if (frames === 40) {
+    const avg = acc / frames;
+    if (avg > 24 && count > 40000) count = Math.floor(count * 0.8);
+    else if (avg < 15 && count < N) count = Math.min(N, Math.floor(count * 1.1));
+    fpsEl.textContent = Math.round(1000 / avg) + " FPS · " + (count / 10000).toFixed(1) + " 万粒子";
+    acc = 0; frames = 0;
+  }
+
+  rotX += velX;
+  tilt = Math.max(0.2, Math.min(1.5, tilt + velY));
+  velX *= 0.94; velY *= 0.9;
+  touch[2] += (touchT - touch[2]) * 0.12;
+  burst[2] = (now - burstAt) / 1000;
+
+  const th = themes[themeIdx];
+  for (const k of ["core", "a", "b"]) for (let i = 0; i < 3; i++) pal[k][i] += (th[k][i] - pal[k][i]) * 0.05;
+
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1f(U.uTime, now / 1000);
+  gl.uniform1f(U.uAspect, cv.width / cv.height);
+  gl.uniform1f(U.uSize, cv.height * 0.012);
+  gl.uniform2f(U.uRot, rotX, tilt);
+  gl.uniform3fv(U.uTouch, touch);
+  gl.uniform3fv(U.uBurst, burst);
+  gl.uniform3fv(U.uCore, pal.core);
+  gl.uniform3fv(U.uArmA, pal.a);
+  gl.uniform3fv(U.uArmB, pal.b);
+  gl.drawArrays(gl.POINTS, 0, count);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
