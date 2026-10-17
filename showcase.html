@@ -37,7 +37,7 @@
 <div class="ui" id="fps">-- FPS</div>
 <button class="ui" id="theme" type="button">配色 · 幻彩</button>
 <div class="ui" id="form">液态金属 · METABALLS</div>
-<div class="ui" id="hint">拖动旋转 · 轻点切换形态</div>
+<div class="ui" id="hint">拖动旋转 · 轻点切换形态 · 双指缩放</div>
 <div id="err">你的浏览器不支持 WebGL</div>
 
 <script id="vs" type="x-shader/x-vertex">
@@ -51,6 +51,7 @@ uniform vec2 uRes;
 uniform float uTime;
 uniform vec2 uRot;
 uniform float uMorph;
+uniform float uDist;            // 相机距离（双指 / 滚轮缩放）
 uniform vec3 uPalA, uPalB, uPalD;
 #define PI 3.14159265
 
@@ -139,8 +140,9 @@ vec3 sky(vec3 rd) {
 }
 
 void main() {
-  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
-  vec3 ro = vec3(0.0, 0.0, 4.2);
+  // 按短边适配：竖屏手机上物体不会超出左右边
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / min(uRes.x, uRes.y);
+  vec3 ro = vec3(0.0, 0.0, uDist);
   vec3 rd = normalize(vec3(uv, -1.6));
 
   float t = 0.0, glow = 0.0;
@@ -150,7 +152,7 @@ void main() {
     glow += exp(-d * 10.0) * 0.015;
     if (d < 0.001) { hit = true; break; }
     t += d;
-    if (t > 9.0) break;
+    if (t > uDist + 5.0) break;
   }
 
   vec3 col = sky(rd);
@@ -209,6 +211,7 @@ const U = {
   time: gl.getUniformLocation(prog, "uTime"),
   rot: gl.getUniformLocation(prog, "uRot"),
   morph: gl.getUniformLocation(prog, "uMorph"),
+  dist: gl.getUniformLocation(prog, "uDist"),
   palA: gl.getUniformLocation(prog, "uPalA"),
   palB: gl.getUniformLocation(prog, "uPalB"),
   palD: gl.getUniformLocation(prog, "uPalD"),
@@ -255,24 +258,59 @@ function nextForm() {
   }, 500);
 }
 
-// 拖动旋转（带惯性）+ 轻点切换
+// 单指拖动旋转（带惯性）+ 轻点切换；双指 / 滚轮缩放
 let rotX = 0, rotY = 0, velX = 0, velY = 0;
 let dragging = false, lastX = 0, lastY = 0, moved = 0;
+const dist0 = innerWidth < innerHeight ? 5.8 : 4.2;   // 竖屏默认拉远一些，横屏保持 4.2
+let dist = dist0, distT = dist0, pinchD = 1, pinched = false;
+const clampD = v => Math.max(2.6, Math.min(9.0, v));
+const ptrs = new Map();                       // 活动指针：pointerId → 当前位置
+function pinchLen() {
+  const [a, b] = [...ptrs.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+}
 cv.addEventListener("pointerdown", e => {
-  dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   cv.setPointerCapture(e.pointerId);
+  if (ptrs.size === 1) {
+    dragging = true; pinched = false; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  } else {
+    // 进入双指：停止旋转和惯性，这次操作结束前都不旋转、不切换
+    dragging = false; pinched = true; velX = velY = 0;
+    pinchD = pinchLen();
+  }
 });
 cv.addEventListener("pointermove", e => {
+  const p = ptrs.get(e.pointerId);
+  if (!p) return;
+  p.x = e.clientX; p.y = e.clientY;
+  if (ptrs.size >= 2) {
+    const d = pinchLen();
+    distT = clampD(distT * pinchD / d);       // 两指距离变大 = 拉近
+    pinchD = d;
+    return;
+  }
   if (!dragging) return;
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   moved += Math.abs(dx) + Math.abs(dy);
   velX = dx * 0.006; velY = dy * 0.006;
   lastX = e.clientX; lastY = e.clientY;
 });
-cv.addEventListener("pointerup", () => {
-  dragging = false;
-  if (moved < 6) nextForm();
-});
+function release(e) {
+  if (!ptrs.delete(e.pointerId)) return;
+  if (ptrs.size >= 2) { pinchD = pinchLen(); return; }
+  if (ptrs.size === 0) {
+    if (dragging && !pinched && moved < 6 && e.type === "pointerup") nextForm();
+    dragging = false; pinched = false;
+  }
+}
+cv.addEventListener("pointerup", release);
+cv.addEventListener("pointercancel", release);
+// 电脑滚轮缩放
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  distT = clampD(distT * Math.exp(e.deltaY * 0.001));
+}, { passive: false });
 
 // 主循环
 const fpsEl = document.getElementById("fps");
@@ -294,11 +332,13 @@ function frame(now) {
   rotY = Math.max(-1.2, Math.min(1.2, rotY));
   velX *= 0.93; velY *= 0.93;
   morph += (target - morph) * 0.035;
+  dist += (distT - dist) * 0.15;
 
   gl.uniform2f(U.res, cv.width, cv.height);
   gl.uniform1f(U.time, now / 1000);
   gl.uniform2f(U.rot, rotX, rotY);
   gl.uniform1f(U.morph, ((morph % 4) + 4) % 4);
+  gl.uniform1f(U.dist, dist);
   const th = themes[themeIdx];
   for (const k of ["a", "b", "d"]) for (let i = 0; i < 3; i++) pal[k][i] += (th[k][i] - pal[k][i]) * 0.05;
   gl.uniform3fv(U.palA, pal.a);
